@@ -1,0 +1,9 @@
+payload:
+  - DOMAIN-SUFFIX,cursor.sh
+  - DOMAIN-SUFFIX,cursor.com
+  - DOMAIN-SUFFIX,cursor.so
+  - DOMAIN-SUFFIX,cursor-cdn.com
+  - DOMAIN-SUFFIX,cursorapi.com
+  - DOMAIN-SUFFIX,dl.todesktop.com
+  - DOMAIN-SUFFIX,todesktop.com
+  - DOMAIN-KEYWORD,cursor
