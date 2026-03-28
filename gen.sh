@@ -18,6 +18,10 @@ GITHUB_RAW="https://raw.githubusercontent.com/StardustMaker/Private-Script/refs/
 SCRIPT_URL="$GITHUB_RAW/gen.sh"
 LOCAL_MODE=false
 
+ENABLE_SEQ_CONFUSION=true
+SEQ_OFFSET_MIN=-500
+SEQ_OFFSET_MAX=500
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 info() { echo -e "${GREEN}[✓]${NC} $1"; }
@@ -119,6 +123,11 @@ install() {
     IPT=$(which iptables 2>/dev/null || echo "/sbin/iptables")
     PY3=$(which python3)
     
+    SEQ_CONFUSION_ARGS=""
+    if [ "$ENABLE_SEQ_CONFUSION" = true ]; then
+        SEQ_CONFUSION_ARGS="-e --seq_offset_min ${SEQ_OFFSET_MIN} --seq_offset_max ${SEQ_OFFSET_MAX}"
+    fi
+    
     cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
 [Unit]
 Description=Gen TCP Window Obfuscation
@@ -128,7 +137,7 @@ After=network.target
 Type=simple
 ExecStartPre=/bin/bash -c '${IPT} -C OUTPUT -p tcp --sport 443 -j NFQUEUE --queue-num ${QUEUE_NUM} 2>/dev/null || ${IPT} -I OUTPUT -p tcp --sport 443 -j NFQUEUE --queue-num ${QUEUE_NUM}'
 ExecStartPre=/bin/bash -c '${IPT} -C OUTPUT -p tcp --sport 80 -j NFQUEUE --queue-num ${QUEUE_NUM} 2>/dev/null || ${IPT} -I OUTPUT -p tcp --sport 80 -j NFQUEUE --queue-num ${QUEUE_NUM}'
-ExecStart=${PY3} ${SCRIPT_PATH} -q ${QUEUE_NUM} -w 1 -s 7 -c 7 -n 7
+ExecStart=${PY3} ${SCRIPT_PATH} -q ${QUEUE_NUM} -w 1 -s 7 -c 7 -n 7 ${SEQ_CONFUSION_ARGS}
 ExecStopPost=/bin/bash -c '${IPT} -D OUTPUT -p tcp --sport 443 -j NFQUEUE --queue-num ${QUEUE_NUM} 2>/dev/null; true'
 ExecStopPost=/bin/bash -c '${IPT} -D OUTPUT -p tcp --sport 80 -j NFQUEUE --queue-num ${QUEUE_NUM} 2>/dev/null; true'
 Restart=always
@@ -156,6 +165,10 @@ EOF
         echo -e "  ${CYAN}服务状态:${NC} 运行中"
         echo -e "  ${CYAN}程序路径:${NC} $SCRIPT_PATH"
         echo -e "  ${CYAN}服务名称:${NC} $SERVICE_NAME"
+        if [ "$ENABLE_SEQ_CONFUSION" = true ]; then
+            echo -e "  ${CYAN}序列号干扰:${NC} ${GREEN}已启用${NC}"
+            echo -e "  ${CYAN}偏移范围:${NC} ${SEQ_OFFSET_MIN} ~ ${SEQ_OFFSET_MAX}"
+        fi
         echo ""
         echo -e "  ${YELLOW}管理命令:${NC}"
         echo -e "    查看状态: bash <(curl -L -s $SCRIPT_URL) status"
@@ -230,6 +243,11 @@ status() {
         echo -e "  内存:     $(ps -p $PID -o rss= 2>/dev/null | awk '{printf "%.1f MB", $1/1024}')"
         echo -e "  CPU:      $(ps -p $PID -o %cpu= 2>/dev/null | awk '{printf "%.1f%%", $1}')"
         echo -e "  运行时间: $(ps -p $PID -o etime= 2>/dev/null | xargs)"
+        
+        CMD=$(ps -p $PID -o args= 2>/dev/null)
+        if echo "$CMD" | grep -q "\-e"; then
+            echo -e "  序列号干扰: ${GREEN}已启用${NC}"
+        fi
     else
         echo -e "  ${YELLOW}无运行进程${NC}"
     fi
@@ -281,17 +299,26 @@ show_help() {
     echo -e "  ${CYAN}用法:${NC}"
     echo ""
     echo -e "  ${YELLOW}本地模式 (使用同目录下的 gen.py):${NC}"
-    echo -e "    bash $0 --local install     安装 Gen TCP混淆 (使用本地文件)"
-    echo -e "    bash $0 -l install          安装 Gen TCP混淆 (使用本地文件)"
+    echo -e "    bash $0 --local install              安装 Gen TCP混淆 (使用本地文件)"
+    echo -e "    bash $0 -l install                   安装 Gen TCP混淆 (使用本地文件)"
     echo ""
     echo -e "  ${YELLOW}在线模式 (从 GitHub 下载):${NC}"
-    echo -e "    bash $0 install             安装 Gen TCP混淆 (从 GitHub 下载)"
-    echo -e "    bash $0 uninstall           卸载 Gen TCP混淆"
-    echo -e "    bash $0 status              查看状态"
-    echo -e "    bash $0 restart             重启服务"
+    echo -e "    bash $0 install                      安装 Gen TCP混淆 (基础模式)"
+    echo -e "    bash $0 --seq install                安装并启用序列号干扰"
+    echo -e "    bash $0 --seq --offset-min -1000 --offset-max 1000 install"
+    echo -e "                                         自定义序列号偏移范围"
+    echo -e "    bash $0 uninstall                    卸载 Gen TCP混淆"
+    echo -e "    bash $0 status                       查看状态"
+    echo -e "    bash $0 restart                      重启服务"
+    echo ""
+    echo -e "  ${YELLOW}序列号干扰参数:${NC}"
+    echo -e "    --seq                  启用序列号干扰增强防检测"
+    echo -e "    --offset-min <num>     序列号偏移最小值 (默认: -500)"
+    echo -e "    --offset-max <num>     序列号偏移最大值 (默认: 500)"
     echo ""
     echo -e "  ${YELLOW}远程一键安装:${NC}"
     echo -e "    bash <(curl -L -s $SCRIPT_URL) install"
+    echo -e "    bash <(curl -L -s $SCRIPT_URL) --seq install"
     echo ""
     exit 1
 }
@@ -301,13 +328,26 @@ for arg in "$@"; do
         --local|-l)
             LOCAL_MODE=true
             ;;
+        --seq)
+            ENABLE_SEQ_CONFUSION=true
+            ;;
+        --offset-min)
+            shift
+            SEQ_OFFSET_MIN="$1"
+            ;;
+        --offset-max)
+            shift
+            SEQ_OFFSET_MAX="$1"
+            ;;
     esac
 done
 
 ACTION=""
 for arg in "$@"; do
     case "$arg" in
-        --local|-l) ;;
+        --local|-l|--seq|--offset-min|--offset-max) ;;
+        -[0-9]*) ;;
+        [0-9]*) ;;
         *) ACTION="$arg" ;;
     esac
 done
