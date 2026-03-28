@@ -15,6 +15,7 @@ QUEUE_NUM=100
 SCRIPT_PATH="/root/gen.py"
 SERVICE_NAME="gen"
 GITHUB_RAW="https://raw.githubusercontent.com/StardustMaker/Private-Script/refs/heads/main"
+SCRIPT_URL="$GITHUB_RAW/antidpi.sh"
 
 info() { echo -e "${GREEN}[✓]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
@@ -142,9 +143,9 @@ EOF
         echo -e "  ${CYAN}服务名称:${NC} $SERVICE_NAME"
         echo ""
         echo -e "  ${YELLOW}管理命令:${NC}"
-        echo -e "    查看状态: bash $0 status"
-        echo -e "    重启服务: bash $0 restart"
-        echo -e "    卸载程序: bash $0 uninstall"
+        echo -e "    查看状态: bash <(curl -L -s $SCRIPT_URL) status"
+        echo -e "    重启服务: bash <(curl -L -s $SCRIPT_URL) restart"
+        echo -e "    卸载程序: bash <(curl -L -s $SCRIPT_URL) uninstall"
         echo ""
     else
         error "服务启动失败，请检查: journalctl -u ${SERVICE_NAME} -e --no-pager"
@@ -237,8 +238,8 @@ status() {
     print_line
     echo -e "${CYAN}  管理命令${NC}"
     print_line
-    echo -e "  重启服务: ${YELLOW}bash $0 restart${NC}"
-    echo -e "  卸载程序: ${YELLOW}bash $0 uninstall${NC}"
+    echo -e "  重启服务: ${YELLOW}bash <(curl -L -s $SCRIPT_URL) restart${NC}"
+    echo -e "  卸载程序: ${YELLOW}bash <(curl -L -s $SCRIPT_URL) uninstall${NC}"
     echo ""
 }
 
@@ -276,10 +277,10 @@ case "${1:-install}" in
     *)
         print_banner
         echo -e "  ${CYAN}用法:${NC}"
-        echo -e "    bash $0 install     安装 AntiDPI"
-        echo -e "    bash $0 uninstall   卸载 AntiDPI"
-        echo -e "    bash $0 status      查看状态"
-        echo -e "    bash $0 restart     重启服务"
+        echo -e "    bash <(curl -L -s $SCRIPT_URL) install     安装 AntiDPI"
+        echo -e "    bash <(curl -L -s $SCRIPT_URL) uninstall   卸载 AntiDPI"
+        echo -e "    bash <(curl -L -s $SCRIPT_URL) status      查看状态"
+        echo -e "    bash <(curl -L -s $SCRIPT_URL) restart     重启服务"
         echo ""
         exit 1
         ;;
