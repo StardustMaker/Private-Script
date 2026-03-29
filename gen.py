@@ -2,78 +2,97 @@
 
 import os
 import signal
-from scapy.all import IP, TCP
+from scapy.all import *
 from netfilterqueue import NetfilterQueue
 import argparse
 import sys
+import threading
+import traceback
 import time
 import random
-import socket
-import struct
 
-window_size = 65535
-window_scale = 0
-confusion_times = 0
+window_size = 17
+edit_times = {}
+window_scale = 7
+confusion_times = 7
+split_number = 7
 enable_seq_confusion = False
 seq_offset_min = -500
 seq_offset_max = 500
 
-raw_socket = None
+def cleanup_edit_times(edit_times):
+    while True:
+        current_time = time.time()
+        for key, value in list(edit_times.items()):
+            created_time = value[0]
+            if current_time - created_time >= 10:
+                try:
+                    del edit_times[key]
+                except:
+                    pass
+        time.sleep(10)
 
-def get_raw_socket():
-    global raw_socket
-    if raw_socket is None:
-        raw_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
-        raw_socket.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
-    return raw_socket
-
-def send_raw_packet(packet_bytes, dst_ip):
-    try:
-        sock = get_raw_socket()
-        sock.sendto(packet_bytes, (dst_ip, 0))
-    except:
-        pass
+def clear_window_scale(ip_layer):
+    if ip_layer.haslayer(TCP):
+        tcp_layer = ip_layer[TCP]
+        tcp_options = tcp_layer.options
+        new_options = []
+        for i in range(len(tcp_options)):
+            if tcp_options[i][0] == 'WScale':
+                continue
+            new_options.append(tcp_options[i])
+        tcp_layer.options = new_options
+    return ip_layer
 
 def modify_window(pkt):
+    global edit_times
     try:
         ip = IP(pkt.get_payload())
-        if not ip.haslayer(TCP):
-            pkt.accept()
-            return
-        
-        tcp = ip[TCP]
-        
-        if tcp.flags == "SA":
-            if window_size > 0:
-                tcp.window = window_size
-            new_options = []
-            for opt in tcp.options:
-                if opt[0] == 'WScale':
-                    if window_scale > 0:
-                        new_options.append(('WScale', window_scale))
-                else:
-                    new_options.append(opt)
-            tcp.options = new_options
-            del ip.chksum
-            del tcp.chksum
-            pkt.set_payload(bytes(ip))
-            
-            if confusion_times >= 1:
-                send_confusion_packet(ip)
-        
-        pkt.accept()
-    except:
-        pkt.accept()
+        if ip.haslayer(TCP):
+            key = f"{ip.dst}_{ip[TCP].dport}"
 
-def send_confusion_packet(ip):
-    try:
-        src_ip = ip.dst
-        dst_ip = ip.src
-        sport = ip[TCP].dport
-        dport = ip[TCP].sport
-        base_seq = ip[TCP].seq
+            if ip[TCP].flags == "SA":
+                edit_times[key] = [time.time(), 1]
+                ip = clear_window_scale(ip)
+                ip[TCP].window = window_size
+                del ip[IP].chksum
+                del ip[TCP].chksum
+                pkt.set_payload(bytes(ip))
+
+                thread = threading.Thread(target=send_payloads, args=(ip, ))
+                thread.start()
+
+            elif ip[TCP].flags == "A":
+                if not key in edit_times:
+                    edit_times[key] = [time.time(), 1]
+                if edit_times[key][1] < split_number:
+                    ip[TCP].window = window_size
+                else:
+                    ip[TCP].window = 28960
+                edit_times[key][1] += 1
+                del ip[IP].chksum
+                del ip[TCP].chksum
+                pkt.set_payload(bytes(ip))
+    except Exception as e:
+        pass
+    pkt.accept()
+
+def send_payloads(ip):
+    if confusion_times < 1:
+        return
+    
+    src_ip = ip.dst
+    dst_ip = ip.src
+    sport = ip[TCP].dport
+    dport = ip[TCP].sport
+    base_seq = ip[TCP].seq
+    
+    for i in range(1, confusion_times + 1):
+        _win_size = window_size
+        if i == confusion_times:
+            _win_size = 65535
         
-        ack_num = base_seq + 1
+        ack_num = base_seq + i
         
         if enable_seq_confusion:
             seq_offset = random.randint(seq_offset_min, seq_offset_max)
@@ -81,62 +100,48 @@ def send_confusion_packet(ip):
         else:
             fake_seq = base_seq
         
-        tcp_header = struct.pack('!HHIIBBHHH',
-            sport,
-            dport,
-            fake_seq,
-            ack_num,
-            0x50 | 0x08,
-            0x10,
-            65535,
-            0,
-            0
+        ack_packet = IP(src=src_ip, dst=dst_ip) / TCP(
+            sport=sport,
+            dport=dport,
+            flags="A",
+            seq=fake_seq,
+            ack=ack_num,
+            window=_win_size,
+            options=[('WScale', window_scale)] + [('NOP', '')] * 5
         )
-        
-        ip_header = struct.pack('!BBHHHBBH4s4s',
-            0x45,
-            0,
-            20 + 20,
-            random.randint(0, 65535),
-            0x4000,
-            64,
-            6,
-            0,
-            socket.inet_aton(src_ip),
-            socket.inet_aton(dst_ip)
-        )
-        
-        packet = ip_header + tcp_header
-        send_raw_packet(packet, dst_ip)
-    except:
-        pass
+        send(ack_packet, verbose=False)
 
 def parsearg():
     global window_size
     global window_scale
     global confusion_times
+    global split_number
     global enable_seq_confusion
     global seq_offset_min
     global seq_offset_max
     
     parser = argparse.ArgumentParser()
+    
     parser.add_argument('-q', '--queue', type=int, help='iptables Queue Num')
-    parser.add_argument('-w', '--window_size', type=int, default=65535, help='Tcp Window Size')
-    parser.add_argument('-s', '--window_scale', type=int, default=0, help='Tcp Window Scale')
-    parser.add_argument('-c', '--confusion_times', type=int, default=0, help='confusion_times (0=disabled)')
-    parser.add_argument('-n', '--split_number', type=int, default=0, help='Tcp Split Number')
+    parser.add_argument('-w', '--window_size', type=int, help='Tcp Window Size')
+    parser.add_argument('-s', '--window_scale', type=int, help='Tcp Window Scale')
+    parser.add_argument('-c', '--confusion_times', type=int, help='confusion_times')
+    parser.add_argument('-n', '--split_number', type=int, help='Tcp Split Number')
+    
     parser.add_argument('-e', '--enable_seq_confusion', action='store_true')
     parser.add_argument('--seq_offset_min', type=int, default=-500)
     parser.add_argument('--seq_offset_max', type=int, default=500)
 
     args = parser.parse_args()
 
-    if args.queue is None:
+    if args.queue is None or args.window_size is None:
         exit(1)
 
     window_size = args.window_size
-    window_scale = args.window_scale
-    confusion_times = args.confusion_times
+    window_scale = args.window_scale if args.window_scale else 7
+    confusion_times = args.confusion_times if args.confusion_times else 7
+    split_number = args.split_number if args.split_number else 7
+    
     enable_seq_confusion = args.enable_seq_confusion
     seq_offset_min = args.seq_offset_min
     seq_offset_max = args.seq_offset_max
@@ -144,6 +149,8 @@ def parsearg():
     return args.queue
 
 def main():
+    thread = threading.Thread(target=cleanup_edit_times, args=(edit_times, ))
+    thread.start()
     queue_num = parsearg()
     nfqueue = NetfilterQueue()
     nfqueue.bind(queue_num, modify_window)
@@ -153,9 +160,6 @@ def main():
         nfqueue.run()
     except KeyboardInterrupt:
         pass
-    finally:
-        if raw_socket:
-            raw_socket.close()
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, lambda signal, frame: sys.exit(0))
